@@ -11,6 +11,8 @@ EventUtil.ContinueOnAddOnLoaded("ExpiryTracker", function()
 
   frame:SetSize(800, 500)
 
+  local currentTime
+
   local scrollBox = CreateFrame("Frame", nil, frame, "WowScrollBoxList")
   local scrollBar = CreateFrame("EventFrame", nil, frame, "MinimalScrollBar")
   local view = CreateScrollBoxListLinearView()
@@ -67,7 +69,6 @@ EventUtil.ContinueOnAddOnLoaded("ExpiryTracker", function()
   frame:SetScript("OnShow", function()
     local all = {}
 
-    local currentTime = time()
     for _, name in ipairs(Syndicator.API.GetAllCharacters()) do
       local c = Syndicator.API.GetCharacter(name)
       local auctions = CopyTable(c.auctions)
@@ -83,6 +84,7 @@ EventUtil.ContinueOnAddOnLoaded("ExpiryTracker", function()
       return a.expirationTime < b.expirationTime
     end)
 
+    currentTime = time()
     scrollBox:SetDataProvider(CreateDataProvider(all))
   end)
 
