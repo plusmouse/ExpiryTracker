@@ -19,8 +19,8 @@ EventUtil.ContinueOnAddOnLoaded("ExpiryTracker", function()
     for _, a in ipairs(auctions) do
       a.character = c.details.character
       a.realm = c.details.realm
+      a.expirationTime = a.expirationTime or 0
     end
-    auctions = tFilter(auctions, function(a) return a.expirationTime ~= nil end, true)
     tAppendAll(all, auctions)
   end
 
@@ -58,11 +58,14 @@ EventUtil.ContinueOnAddOnLoaded("ExpiryTracker", function()
     f.link:SetText(data.itemLink)
     f.realm:SetText(data.realm)
     f.character:SetText(data.character)
-    local text = date("%c", data.expirationTime)
-    if data.expirationTime <= currentTime then
-      text = RED_FONT_COLOR:WrapTextInColorCode(text)
-    elseif data.expirationTime - currentTime < 60 * 60 then
-      text = ORANGE_FONT_COLOR:WrapTextInColorCode(text)
+    local text = GRAY_FONT_COLOR:WrapTextInColorCode("Unknown")
+    if data.expirationTime ~= 0 then
+      text = date("%c", data.expirationTime)
+      if data.expirationTime <= currentTime then
+        text = RED_FONT_COLOR:WrapTextInColorCode(text)
+      elseif data.expirationTime - currentTime < 60 * 60 then
+        text = ORANGE_FONT_COLOR:WrapTextInColorCode(text)
+      end
     end
     f.expiry:SetText(text)
   end)
