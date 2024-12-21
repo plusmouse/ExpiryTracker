@@ -1,0 +1,7 @@
+## Interface: 110007
+## Title: Baganator
+## Version: @project-version@
+## Author: plusmouse
+## RequiredDeps: Syndicator
+
+Main.lua
