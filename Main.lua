@@ -8,10 +8,61 @@ EventUtil.ContinueOnAddOnLoaded("ExpiryTracker", function()
   frame:SetMovable(true)
   frame:SetClampedToScreen(true)
   frame:SetUserPlaced(false)
+  frame:SetToplevel(true)
+
+  frame:SetScript("OnDragStart", function(self)
+    self:StartMoving()
+    self:SetUserPlaced(false)
+  end)
+
+  frame:SetScript("OnDragStop", function(self)
+    self:StopMovingOrSizing()
+    self:SetUserPlaced(false)
+  end)
 
   frame:SetSize(800, 500)
 
   local currentTime
+
+  local headerFrame = CreateFrame("Frame", nil, frame)
+  headerFrame:SetPoint("TOPLEFT", 10, -30)
+  headerFrame:SetPoint("TOPRIGHT", -10, -30)
+  headerFrame:SetHeight(22)
+
+  headerFrame.itemLink = headerFrame:CreateFontString(nil, nil, "GameFontNormal")
+  headerFrame.itemLink:SetPoint("TOPLEFT")
+  headerFrame.itemLink:SetWidth(350)
+  headerFrame.itemLink:SetHeight(20)
+  headerFrame.itemLink:SetJustifyH("LEFT")
+  headerFrame.itemLink:SetText("Item Link")
+
+  headerFrame.realm = headerFrame:CreateFontString(nil, nil, "GameFontNormal")
+  headerFrame.realm:SetPoint("LEFT", headerFrame.itemLink, "RIGHT")
+  headerFrame.realm:SetWidth(150)
+  headerFrame.realm:SetHeight(20)
+  headerFrame.realm:SetJustifyH("LEFT")
+  headerFrame.realm:SetText("Realm")
+
+  headerFrame.character = headerFrame:CreateFontString(nil, nil, "GameFontNormal")
+  headerFrame.character:SetPoint("LEFT", headerFrame.realm, "RIGHT")
+  headerFrame.character:SetWidth(80)
+  headerFrame.character:SetHeight(20)
+  headerFrame.character:SetJustifyH("LEFT")
+  headerFrame.character:SetText("Character")
+
+  headerFrame.expiry = headerFrame:CreateFontString(nil, nil, "GameFontNormal")
+  headerFrame.expiry:SetPoint("LEFT", headerFrame.character, "RIGHT")
+  headerFrame.expiry:SetPoint("RIGHT")
+  headerFrame.expiry:SetHeight(20)
+  headerFrame.expiry:SetJustifyH("LEFT")
+  headerFrame.expiry:SetText("Expiry Time")
+
+  local divider = headerFrame:CreateTexture(nil, "ARTWORK")
+  divider:SetTexture("Interface\\Common\\UI-TooltipDivider-Transparent")
+  divider:SetPoint("BOTTOMLEFT")
+  divider:SetPoint("BOTTOMRIGHT")
+  divider:SetHeight(1)
+  divider:SetColorTexture(0.93, 0.93, 0.93, 0.45)
 
   local scrollBox = CreateFrame("Frame", nil, frame, "WowScrollBoxList")
   local scrollBar = CreateFrame("EventFrame", nil, frame, "MinimalScrollBar")
@@ -57,9 +108,9 @@ EventUtil.ContinueOnAddOnLoaded("ExpiryTracker", function()
   
   ScrollUtil.InitScrollBoxListWithScrollBar(scrollBox, scrollBar, view)
   
-  scrollBox:SetPoint("TOPLEFT", 10, -50)
+  scrollBox:SetPoint("TOPLEFT", 10, -56)
   scrollBox:SetPoint("BOTTOMRIGHT", -40, 20)
-  scrollBar:SetPoint("TOPRIGHT", -10, -50)
+  scrollBar:SetPoint("TOPRIGHT", -10, -56)
   scrollBar:SetPoint("BOTTOMRIGHT", -10, 20)
 
 
