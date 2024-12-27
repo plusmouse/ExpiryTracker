@@ -1,5 +1,5 @@
 EventUtil.ContinueOnAddOnLoaded("ExpiryTracker", function()
-  local frame = CreateFrame("Frame", nil, UIParent, "ButtonFrameTemplate")
+  local frame = CreateFrame("Frame", "ExpiryTrackerFrame", UIParent, "ButtonFrameTemplate")
   frame:Hide()
   ButtonFrameTemplate_HidePortrait(frame)
   ButtonFrameTemplate_HideButtonBar(frame)
@@ -9,6 +9,7 @@ EventUtil.ContinueOnAddOnLoaded("ExpiryTracker", function()
   frame:SetClampedToScreen(true)
   frame:SetUserPlaced(false)
   frame:SetToplevel(true)
+  tinsert(UISpecialFrames, frame:GetName()) -- Allow closing with Escape
 
   frame:SetScript("OnDragStart", function(self)
     self:StartMoving()
@@ -113,7 +114,6 @@ EventUtil.ContinueOnAddOnLoaded("ExpiryTracker", function()
   scrollBar:SetPoint("TOPRIGHT", -10, -56)
   scrollBar:SetPoint("BOTTOMRIGHT", -10, 20)
 
-
   frame:SetTitle("Auction Expiration Times")
   frame:EnableMouse(true)
   frame:SetPoint("CENTER")
@@ -132,7 +132,10 @@ EventUtil.ContinueOnAddOnLoaded("ExpiryTracker", function()
     end
 
     table.sort(all, function(a, b)
-      return a.expirationTime < b.expirationTime
+      if a.realm == b.realm then
+        return a.expirationTime < b.expirationTime
+      end
+      return a.realm < b.realm
     end)
 
     currentTime = time()
