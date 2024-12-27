@@ -1,5 +1,5 @@
 ## Interface: 110007
-## Title: Baganator
+## Title: Expiry Tracker
 ## Version: @project-version@
 ## Author: plusmouse
 ## RequiredDeps: Syndicator
