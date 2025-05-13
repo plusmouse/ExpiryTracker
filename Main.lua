@@ -122,13 +122,15 @@ EventUtil.ContinueOnAddOnLoaded("ExpiryTracker", function()
 
     for _, name in ipairs(Syndicator.API.GetAllCharacters()) do
       local c = Syndicator.API.GetCharacter(name)
-      local auctions = CopyTable(c.auctions)
-      for _, a in ipairs(auctions) do
-        a.character = c.details.character
-        a.realm = c.details.realm
-        a.expirationTime = a.expirationTime or 0
+      if c.auctions then
+        local auctions = CopyTable(c.auctions)
+        for _, a in ipairs(auctions) do
+          a.character = c.details.character
+          a.realm = c.details.realm
+          a.expirationTime = a.expirationTime or 0
+        end
+        tAppendAll(all, auctions)
       end
-      tAppendAll(all, auctions)
     end
 
     table.sort(all, function(a, b)
