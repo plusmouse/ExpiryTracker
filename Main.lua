@@ -1,3 +1,31 @@
+-- Future
+local VERY_SOON, SOON = SECONDS_PER_HOUR * 1, SECONDS_PER_HOUR * 3
+-- Past; rumors say that auctions will be deleted from the mailbox after 30 days
+local RECENT, MAIL_EXPIRY = SECONDS_PER_DAY * 1, SECONDS_PER_DAY * 30
+
+-- https://www.townlong-yak.com/framexml/live/Blizzard_SharedXML/TimeUtil.lua
+local activeFormatter = CreateFromMixins(SecondsFormatterMixin)
+activeFormatter:Init(
+  SECONDS_PER_MIN, -- ApproximationSeconds
+  SecondsFormatter.Abbreviation.Truncate, -- None, Truncate, OneLetter
+  -- Prepend `Dont` to negate
+  SecondsFormatterConstants.RoundUpLastUnit, -- Guarantee that the auction is expired at the shown time
+  SecondsFormatterConstants.ConvertToLower, -- 'OneLetter' abbrev seems to be lowercase only
+  SecondsFormatterConstants.RoundUpIntervals -- e.g. 1 day instead of 24 hr
+)
+activeFormatter:SetMinInterval(SecondsFormatter.Interval.Minutes)
+
+local expiredFormatter = CreateFromMixins(activeFormatter)
+expiredFormatter:SetMinInterval(SecondsFormatter.Interval.Hours)
+expiredFormatter:SetApproximationSeconds(SECONDS_PER_HOUR)
+expiredFormatter:SetCanRoundUpLastUnit(SecondsFormatterConstants.DontRoundUpLastUnit)
+expiredFormatter:SetCanRoundUpIntervals(SecondsFormatterConstants.DontRoundUpIntervals)
+expiredFormatter:SetDefaultAbbreviation(SecondsFormatter.Abbreviation.None)
+
+local longExpiredFormatter = CreateFromMixins(expiredFormatter)
+longExpiredFormatter:SetMinInterval(SecondsFormatter.Interval.Days)
+longExpiredFormatter:SetApproximationSeconds(SECONDS_PER_DAY)
+
 EventUtil.ContinueOnAddOnLoaded("ExpiryTracker", function()
   local frame = CreateFrame("Frame", "ExpiryTrackerFrame", UIParent, "ButtonFrameTemplate")
   frame:Hide()
@@ -55,7 +83,7 @@ EventUtil.ContinueOnAddOnLoaded("ExpiryTracker", function()
   headerFrame.expiry:SetPoint("LEFT", headerFrame.character, "RIGHT")
   headerFrame.expiry:SetPoint("RIGHT")
   headerFrame.expiry:SetHeight(20)
-  headerFrame.expiry:SetJustifyH("LEFT")
+  headerFrame.expiry:SetJustifyH("RIGHT")
   headerFrame.expiry:SetText("Expiry Time")
 
   local divider = headerFrame:CreateTexture(nil, "ARTWORK")
@@ -68,26 +96,26 @@ EventUtil.ContinueOnAddOnLoaded("ExpiryTracker", function()
   local scrollBox = CreateFrame("Frame", nil, frame, "WowScrollBoxList")
   local scrollBar = CreateFrame("EventFrame", nil, frame, "MinimalScrollBar")
   local view = CreateScrollBoxListLinearView()
-  view:SetElementExtent(20)
+  view:SetElementExtent(14)
   view:SetElementInitializer("Frame", function(f, data)
     if not f.link then
       f.link = f:CreateFontString(nil, nil, "GameFontNormal")
-      f.link:SetHeight(20)
+      f.link:SetHeight(14)
       f.link:SetPoint("LEFT")
       f.link:SetWidth(350)
       f.link:SetJustifyH("LEFT")
       f.realm = f:CreateFontString(nil, nil, "GameFontHighlight")
-      f.realm:SetHeight(20)
+      f.realm:SetHeight(14)
       f.realm:SetPoint("LEFT", f.link, "RIGHT")
       f.realm:SetWidth(150)
       f.realm:SetJustifyH("LEFT")
       f.character = f:CreateFontString(nil, nil, "GameFontNormal")
-      f.character:SetHeight(20)
+      f.character:SetHeight(14)
       f.character:SetPoint("LEFT", f.realm, "RIGHT")
       f.character:SetWidth(80)
       f.character:SetJustifyH("LEFT")
       f.expiry = f:CreateFontString(nil, nil, "GameFontHighlight")
-      f.expiry:SetHeight(20)
+      f.expiry:SetHeight(14)
       f.expiry:SetPoint("LEFT", f.character, "RIGHT")
       f.expiry:SetPoint("RIGHT")
       f.expiry:SetJustifyH("RIGHT")
@@ -97,12 +125,22 @@ EventUtil.ContinueOnAddOnLoaded("ExpiryTracker", function()
     f.character:SetText(data.character)
     local text = GRAY_FONT_COLOR:WrapTextInColorCode("Unknown")
     if data.expirationTime ~= 0 then
-      text = date("%c", data.expirationTime)
-      if data.expirationTime <= currentTime then
-        text = RED_FONT_COLOR:WrapTextInColorCode(text)
-      elseif data.expirationTime - currentTime < 60 * 60 then
-        text = ORANGE_FONT_COLOR:WrapTextInColorCode(text)
+      local remainingTime = data.expirationTime - currentTime
+      local diff, color = abs(remainingTime), nil
+      if remainingTime < 0 then -- Expired
+        if diff < RECENT then
+          text = format("%s ago", expiredFormatter:Format(diff))
+        elseif diff < MAIL_EXPIRY then
+          text = format("%s ago", longExpiredFormatter:Format(diff))
+        else
+          text = format("> %s days ago! - %s", MAIL_EXPIRY / SECONDS_PER_DAY, date("%b %Y", data.expirationTime))
+        end
+        color = diff > MAIL_EXPIRY - SECONDS_PER_DAY * 7 and RED_FONT_COLOR or WARNING_FONT_COLOR
+      else -- Still active
+        text = format("%s - %s", activeFormatter:Format(diff), date("%a %H:%M", data.expirationTime))
+        color = diff < VERY_SOON and ORANGE_FONT_COLOR or diff < SOON and YELLOW_FONT_COLOR
       end
+    if color then text = color:WrapTextInColorCode(text) end
     end
     f.expiry:SetText(text)
   end)
