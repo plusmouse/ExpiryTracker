@@ -1,7 +1,7 @@
 ## Interface: 120005, 120000, 120001
 ## Title: Expiry Tracker
 ## Version: 5
-## Author: plusmouse
+## Author: BDON3434
 ## RequiredDeps: Syndicator
 ## SavedVariables: ExpiryTrackerDB
 ## Category-enUS: Auctions
