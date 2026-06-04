@@ -11,7 +11,7 @@
 - Added `/etrdebug` command and Config debug button
 - Updated toc file to support 12.0.5 and added Auctions category
 
-## [4](https://github.com/plusmouse/ExpiryTracker/tree/4) (2026-01-24)
+## 4 (2026-01-24)
 
 - Bump toc  
 -  Better and dynamic representation of expiry times, relative times; some minor stuff #3  
