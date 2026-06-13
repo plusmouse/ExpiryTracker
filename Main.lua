@@ -47,16 +47,15 @@ end
 
 ExpiryTrackerDB = ExpiryTrackerDB or {}
 
--- Config lives inside ExpiryTrackerDB so it persists and can be edited
 local function GetConfig()
     ExpiryTrackerDB.config = ExpiryTrackerDB.config or {}
     local c = ExpiryTrackerDB.config
-    if c.warnDays   == nil then c.warnDays   = 3   end  -- first popup threshold (days)
-    if c.urgentDays == nil then c.urgentDays = 1   end  -- urgent popup threshold (days)
-    if c.snoozeMins  == nil then c.snoozeMins  = 2    end
-    if c.showChat    == nil then c.showChat    = true end
+    if c.warnDays          == nil then c.warnDays          = 3    end
+    if c.urgentDays        == nil then c.urgentDays        = 1    end
+    if c.snoozeMins        == nil then c.snoozeMins        = 2    end
+    if c.showChat          == nil then c.showChat          = true end
     if c.enablePopup       == nil then c.enablePopup       = true end
-    if c.showMinimapButton  == nil then c.showMinimapButton  = true end
+    if c.showMinimapButton == nil then c.showMinimapButton = true end
     if c.showCompartment   == nil then c.showCompartment   = true end
     return c
 end
@@ -66,19 +65,12 @@ local function GetCharacterKey(name, realm)
 end
 
 local function ScanMailbox()
-    local totalGold        = 0
-    local oldestExpiry     = 0
-    -- Count AH mails that have items attached (returned unsold items).
-    -- Gold-only AH mails (successful sales) also come from "Auction House"
-    -- but have hasItem=false — we must not count those as item returns.
-    -- GetInboxHeaderInfo returns:
-    --   packageIcon, stationeryIcon, sender, subject, money, CODAmount,
-    --   daysLeft, hasItem, isRead, wasRead, isPending
+    local totalGold          = 0
+    local oldestExpiry       = 0
     local auctionItemMailCount = 0
     for i = 1, GetInboxNumItems() do
         local _, _, sender, _, money, _, daysLeft, hasItem = GetInboxHeaderInfo(i)
         if sender == "Auction House" and hasItem then
-            -- This is a returned (unsold) item — counts as expired auction
             auctionItemMailCount = auctionItemMailCount + 1
         end
         if money and money > 0 then
@@ -97,15 +89,11 @@ end
 local function UpdateMailboxData()
     local key = GetCharacterKey()
     local gold, oldestExpiry, auctionMailCount = ScanMailbox()
-    -- Only write to DB if there is something meaningful to record.
-    -- This prevents empty {} entries appearing in SavedVariables for
-    -- characters who opened their mailbox but had nothing relevant.
     if gold > 0 or auctionMailCount > 0 or ExpiryTrackerDB[key] then
         ExpiryTrackerDB[key] = ExpiryTrackerDB[key] or {}
         ExpiryTrackerDB[key].gold             = gold
         ExpiryTrackerDB[key].oldestMailExpiry = oldestExpiry
         ExpiryTrackerDB[key].lastMailCheck    = time()
-        -- auctionMailCount = AH mails with items attached (returned unsold items only)
         ExpiryTrackerDB[key].auctionMailCount = auctionMailCount
     end
 end
@@ -114,52 +102,36 @@ end
 -- Alert System
 -- =============================================================================
 
--- Shared helper: calculate the true expired count for a character.
--- Uses auctionMailCount from ExpiryTrackerDB when available to correct
--- Syndicator's stale data (Syndicator only updates when AH is opened).
 local function CalcTrueExpired(c, charKey)
     local now = time()
     local syndicatorExpired = 0
-    local oldestExpiredTime = 0  -- when the oldest expired auction actually expired
+    local oldestExpiredTime = 0
     if c.auctions then
         for _, a in ipairs(c.auctions) do
             local exp = a.expirationTime or 0
             if exp > 0 and exp < now then
                 syndicatorExpired = syndicatorExpired + 1
-                -- Track the most recent expiry time (largest timestamp < now)
                 if exp > oldestExpiredTime then
                     oldestExpiredTime = exp
                 end
             end
         end
     end
-
     local db = ExpiryTrackerDB[charKey] or {}
-
-    -- Only trust auctionMailCount if the mailbox was scanned AFTER the
-    -- auctions expired. If lastMailCheck predates the expiry times, the
-    -- scan happened before these items arrived in the mailbox and the
-    -- count is stale/irrelevant — fall back to Syndicator.
     local lastCheck = db.lastMailCheck or 0
     if db.auctionMailCount ~= nil and lastCheck >= oldestExpiredTime then
         return math.min(syndicatorExpired, db.auctionMailCount)
     end
-
     return syndicatorExpired
 end
 
--- Build a flat list of all characters that have either:
---   a) expired auctions waiting in the mailbox, OR
---   b) mailbox gold expiring within warnDays
--- Sorted soonest goldExpiry first.
 local function BuildAlerts()
     local cfg    = GetConfig()
     local now    = time()
     local warnAt = now + (cfg.warnDays * 86400)
+    local byKey  = {}
 
-    local byKey = {}
-
-    -- Step 1: expired auctions from Syndicator, corrected by mailbox scan data
+    -- Step 1: expired auctions from Syndicator
     if Syndicator and Syndicator.API then
         for _, name in ipairs(Syndicator.API.GetAllCharacters()) do
             local c = Syndicator.API.GetCharacter(name)
@@ -167,29 +139,26 @@ local function BuildAlerts()
                 local realm    = c.details.realm     or "Unknown"
                 local charName = c.details.character or "Unknown"
                 local key      = charName .. "-" .. realm
-                -- Use same correction logic as Refresh() so popup matches the tabs
                 local trueExpired = CalcTrueExpired(c, key)
                 if trueExpired > 0 then
                     local db      = ExpiryTrackerDB[key] or {}
-                    local goldExp = db.oldestMailExpiry or 0
-                    local gold    = db.gold or 0
                     byKey[key] = {
                         key        = key,
                         charName   = charName,
                         realm      = realm,
                         expired    = trueExpired,
-                        goldExpiry = goldExp,
-                        gold       = gold,
+                        goldExpiry = db.oldestMailExpiry or 0,
+                        gold       = db.gold or 0,
                     }
                 end
             end
         end
     end
 
-    -- Step 2: characters with mailbox gold — include if expiry within warnDays
-    -- or if expiry is unknown (oldestMailExpiry=0 means scanned before we tracked it)
+    -- Step 2: characters with mailbox gold
     for key, db in pairs(ExpiryTrackerDB) do
-        if key ~= "config" and key ~= "snooze" and key ~= "minimapAngle" then
+        if key ~= "config" and key ~= "snooze" and key ~= "minimapAngle"
+           and key ~= "mainWindowPos" and key ~= "alertPopupPos" and key ~= "minimap" then
             local goldExp = db.oldestMailExpiry or 0
             local gold    = db.gold or 0
             if gold > 0 and (goldExp == 0 or goldExp < warnAt) then
@@ -211,8 +180,12 @@ local function BuildAlerts()
     local alerts = {}
     for _, v in pairs(byKey) do tinsert(alerts, v) end
 
-    -- Sort: soonest goldExpiry first; zero/missing goldExpiry sorts to end
+    -- Current character first if they have expired auctions, then by expired count
+    local currentKey = GetCharacterKey()
     table.sort(alerts, function(a, b)
+        if a.key == currentKey and a.expired > 0 then return true end
+        if b.key == currentKey and b.expired > 0 then return false end
+        if a.expired ~= b.expired then return a.expired > b.expired end
         local aE = (a.goldExpiry and a.goldExpiry > 0) and a.goldExpiry or math.huge
         local bE = (b.goldExpiry and b.goldExpiry > 0) and b.goldExpiry or math.huge
         return aE < bE
@@ -221,18 +194,15 @@ local function BuildAlerts()
     return alerts
 end
 
-local RunLoginChecks  -- forward declaration; defined in Login checks section
+local RunLoginChecks  -- forward declaration
+
 -- =============================================================================
 -- Popup
--- Fixed height (~3 characters tall), scrollable via WowScrollBoxList +
--- MinimalScrollBar matching the main window style.
--- Escape key closes it via UISpecialFrames registration.
 -- =============================================================================
 
 local alertPopup = nil
 
 local function GetSoonestExpiryForChar(charName, realm, now)
-    -- Pull the soonest expiry from Syndicator auction data for this character
     if not (Syndicator and Syndicator.API) then return 0 end
     for _, name in ipairs(Syndicator.API.GetAllCharacters()) do
         local c = Syndicator.API.GetCharacter(name)
@@ -244,9 +214,7 @@ local function GetSoonestExpiryForChar(charName, realm, now)
                 if c.auctions then
                     for _, a in ipairs(c.auctions) do
                         local exp = a.expirationTime or 0
-                        if exp > 0 then
-                            if soonest == 0 or exp < soonest then soonest = exp end
-                        end
+                        if exp > 0 and (soonest == 0 or exp < soonest) then soonest = exp end
                     end
                 end
                 return soonest
@@ -260,16 +228,14 @@ local function CreateAlertPopup()
     if alertPopup then return alertPopup end
 
     local f = CreateFrame("Frame", "ExpiryTrackerAlertFrame", UIParent, "BackdropTemplate")
-    f:SetSize(480, 260)   -- fixed height, content scrolls inside
+    f:SetSize(480, 260)
     f:SetFrameStrata("DIALOG")
-    -- Only set CENTER the very first time; after that restore last position
     if not ExpiryTrackerDB.alertPopupPos then
         f:SetPoint("CENTER")
     else
         local p = ExpiryTrackerDB.alertPopupPos
         f:SetPoint(p.point, UIParent, p.relPoint, p.x, p.y)
     end
-    -- Save position whenever the user moves it
     f:SetScript("OnDragStop", function(self)
         self:StopMovingOrSizing()
         local point, _, relPoint, x, y = self:GetPoint()
@@ -287,14 +253,11 @@ local function CreateAlertPopup()
         insets   = { left = 11, right = 12, top = 12, bottom = 11 },
     })
     f:SetBackdropColor(1, 1, 1, 1)
-
-    -- Register with UISpecialFrames so Escape closes it
     tinsert(UISpecialFrames, f:GetName())
 
     f.title = f:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
     f.title:SetPoint("TOP", 0, -20)
 
-    -- Scrollable content area
     f.scrollBox = CreateFrame("Frame", nil, f, "WowScrollBoxList")
     f.scrollBar = CreateFrame("EventFrame", nil, f, "MinimalScrollBar")
     f.scrollBox:SetPoint("TOPLEFT",     f, "TOPLEFT",     18,  -42)
@@ -305,9 +268,9 @@ local function CreateAlertPopup()
     f.view = CreateScrollBoxListLinearView()
     f.view:SetElementExtent(18)
     ScrollUtil.InitScrollBoxListWithScrollBar(f.scrollBox, f.scrollBar, f.view)
+    f.scrollBar:SetHideIfUnscrollable(true)
 
-    -- Buttons
-	f.snoozeBtn = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
+    f.snoozeBtn = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
     f.snoozeBtn:SetSize(120, 26)
     f.snoozeBtn:SetPoint("BOTTOM", 0, 14)
 
@@ -317,10 +280,7 @@ local function CreateAlertPopup()
     f.openBtn:SetText("Open Summary")
     f.openBtn:SetScript("OnClick", function()
         f:Hide()
-        local main = ExpiryTrackerFrame
-        if main then
-            main:Show()
-        end
+        if ExpiryTrackerFrame then ExpiryTrackerFrame:Show() end
     end)
 
     f.dismissBtn = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
@@ -340,7 +300,6 @@ local function ShowAlertPopup(alerts, urgency)
     local f   = CreateAlertPopup()
     local now = time()
 
-    -- Title: always red regardless of urgency type
     f.title:SetText("|cffff3030Expired Auctions|r")
 
     f.snoozeBtn:SetText("Snooze " .. cfg.snoozeMins .. " min")
@@ -350,28 +309,17 @@ local function ShowAlertPopup(alerts, urgency)
         C_Timer.After(cfg.snoozeMins * 60 + 1, RunLoginChecks)
     end)
 
-    -- Build flat row list for the scroll view
-    -- Each entry: { text, color }
-    -- Rows per character:
-    --   Line 1: CharName (Realm)            white/yellow
-    --   Line 2:   X expired auction(s)...   red       (if expired)
-    --   Line 3:   Soonest expiry: ...        coloured  (from Syndicator or goldExpiry)
-    --   Line 4:   Mail gold: X expires ...  yellow    (if gold data)
-    -- Helper: color an expiry diff according to user config thresholds
     local function ExpiryColor(diff)
-        if diff < 0 then return "|cffff3030" end              -- expired = red
-        if diff < (cfg.urgentDays * 86400) then return "|cffff3030" end  -- urgent = red
-        if diff < (cfg.warnDays   * 86400) then return "|cffffff00" end  -- warn   = yellow
-        return "|cffffffff"                                     -- normal  = white
+        if diff < 0                            then return "|cffff3030" end
+        if diff < (cfg.urgentDays * 86400)     then return "|cffff3030" end
+        if diff < (cfg.warnDays   * 86400)     then return "|cffffff00" end
+        return "|cffffffff"
     end
 
     local rows = {}
     for _, alert in ipairs(alerts) do
-        -- Line 1: CharName (Realm) — white
         tinsert(rows, { text = alert.charName .. " (" .. alert.realm .. ")", color = "|cffffffff" })
 
-        -- Line 2: "X auction/auctions  <expiry>" on one line
-        -- auction singular if 1, plural otherwise
         if alert.expired > 0 then
             local auctionWord = alert.expired == 1 and "auction" or "auctions"
             local soonest = GetSoonestExpiryForChar(alert.charName, alert.realm, now)
@@ -391,21 +339,18 @@ local function ShowAlertPopup(alerts, urgency)
             tinsert(rows, { text = "  " .. alert.expired .. " " .. auctionWord .. expiryPart, color = "|cffffffff" })
         end
 
-        -- Line 3: "Mail gold: X  <gold expiry>" on one line, gold expiry colored per config
         if (alert.goldExpiry or 0) > 0 and (alert.gold or 0) > 0 then
             local diff = alert.goldExpiry - now
             if diff > 0 then
-                local expireStr = date("%a %b %d at %H:%M", alert.goldExpiry)
+                local expireStr  = date("%a %b %d at %H:%M", alert.goldExpiry)
                 local expiryPart = "  expires " .. ExpiryColor(diff) .. expireStr .. "|r"
                 tinsert(rows, { text = "  Mail gold: " .. FormatGoldWithCommas(alert.gold) .. expiryPart, color = "|cffffffff" })
             end
         end
 
-        -- Blank spacer row between characters
         tinsert(rows, { text = "", color = "" })
     end
 
-    -- Feed rows into the scroll view
     f.view:SetElementInitializer("Frame", function(rowFrame, data)
         if not rowFrame.fs then
             rowFrame.fs = rowFrame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
@@ -416,39 +361,33 @@ local function ShowAlertPopup(alerts, urgency)
         rowFrame.fs:SetText((data.color or "") .. (data.text or "") .. (data.color ~= "" and "|r" or ""))
     end)
     f.scrollBox:SetDataProvider(CreateDataProvider(rows))
-
     f:Show()
 end
-
 
 -- =============================================================================
 -- Login checks
 -- =============================================================================
 
-local loginCheckDone = false  -- ensure chat message only prints once per session
+local loginCheckDone = false
 
 RunLoginChecks = function()
-    local cfg  = GetConfig()
-    local now  = time()
+    local cfg = GetConfig()
+    local now = time()
 
-    -- Check snooze first — if still snoozed, schedule retry and exit cleanly
     local snoozeUntil = ExpiryTrackerDB.snooze or 0
     if now < snoozeUntil then
-        local remaining = snoozeUntil - now
-        C_Timer.After(remaining + 1, RunLoginChecks)
+        C_Timer.After(snoozeUntil - now + 1, RunLoginChecks)
         return
     end
 
     local alerts = BuildAlerts()
     if #alerts == 0 then return end
 
-    -- Level 1: Chat message (only once per login session)
     if not loginCheckDone and cfg.showChat then
         loginCheckDone = true
         local expiredChars = {}
         for _, alert in ipairs(alerts) do
             if alert.expired > 0 then
-                -- Get soonest expiry from Syndicator for color logic
                 local soonest = GetSoonestExpiryForChar(alert.charName, alert.realm, now)
                 local expStr = ""
                 if soonest > 0 then
@@ -457,7 +396,7 @@ RunLoginChecks = function()
                     if diff < 0 then
                         local absDiff = abs(diff)
                         local fmt = absDiff < RECENT and expiredFormatter or longExpiredFormatter
-                        expiryText = format("%s ago", fmt:Format(absDiff))
+                        expiryText  = format("%s ago", fmt:Format(absDiff))
                         expiryColor = "|cffff3030"
                     else
                         expiryText = format("%s - %s", activeFormatter:Format(diff), date("%a %H:%M", soonest))
@@ -471,8 +410,7 @@ RunLoginChecks = function()
                     end
                     expStr = "  " .. expiryColor .. expiryText .. "|r"
                 end
-                tinsert(expiredChars, alert.charName .. " (" .. alert.realm .. "): "
-                    .. alert.expired .. " expired" .. expStr)
+                tinsert(expiredChars, alert.charName .. " (" .. alert.realm .. "): " .. alert.expired .. " expired" .. expStr)
             end
         end
         if #expiredChars > 0 then
@@ -481,21 +419,17 @@ RunLoginChecks = function()
         end
     end
 
-    -- Level 2/3: Popup — determine urgency and which characters qualify
-    local warnAt = now + (cfg.warnDays   * 86400)
-    local urgAt  = now + (cfg.urgentDays * 86400)
-
+    local warnAt     = now + (cfg.warnDays   * 86400)
+    local urgAt      = now + (cfg.urgentDays * 86400)
     local popupList  = {}
-    local hasExpired = false
-    local hasUrgent  = false
-    local hasWarn    = false
+    local hasExpired, hasUrgent, hasWarn = false, false, false
 
     for _, alert in ipairs(alerts) do
-        local goldExp   = alert.goldExpiry or 0
+        local goldExp     = alert.goldExpiry or 0
         local isExpired   = alert.expired > 0
         local isUrgent    = goldExp > 0 and goldExp < urgAt
         local isWarn      = goldExp > 0 and goldExp < warnAt
-        local isGoldKnown = (alert.gold or 0) > 0  -- has gold, show regardless
+        local isGoldKnown = (alert.gold or 0) > 0
 
         if isExpired or isUrgent or isWarn or isGoldKnown then
             tinsert(popupList, alert)
@@ -506,11 +440,13 @@ RunLoginChecks = function()
     end
 
     if #popupList > 0 then
-        local urgency = hasUrgent and "urgent" or (hasExpired and "expired" or "warn")
-        ShowAlertPopup(popupList, urgency)
+        ShowAlertPopup(popupList, hasUrgent and "urgent" or (hasExpired and "expired" or "warn"))
     end
 end
 
+-- =============================================================================
+-- Events
+-- =============================================================================
 
 local eventFrame = CreateFrame("Frame")
 eventFrame:RegisterEvent("PLAYER_LOGIN")
@@ -519,14 +455,12 @@ eventFrame:RegisterEvent("MAIL_CLOSED")
 eventFrame:RegisterEvent("MAIL_INBOX_UPDATE")
 eventFrame:SetScript("OnEvent", function(_, event)
     if event == "PLAYER_LOGIN" then
-        local key = GetCharacterKey()
-        -- Only create a DB entry when we actually have data to store
-        -- (avoids empty {} entries cluttering the SavedVariables file)
+        -- RunLoginChecks after a short delay to let Syndicator finish loading
         C_Timer.After(5, RunLoginChecks)
-        UpdateMinimapButton()
+        -- UpdateMinimapButton is called inside ContinueOnAddOnLoaded which
+        -- runs at the same time — no need to call it here
         if Syndicator and Syndicator.CallbackRegistry then
             Syndicator.CallbackRegistry:RegisterCallback("AuctionsCacheUpdate", function()
-                loginCheckDone = false
                 if ExpiryTrackerFrame and ExpiryTrackerFrame:IsShown() then
                     ExpiryTrackerFrame:GetScript("OnShow")()
                 end
@@ -542,18 +476,12 @@ eventFrame:SetScript("OnEvent", function(_, event)
         eventFrame:RegisterEvent("AUCTION_HOUSE_CLOSED")
 
     elseif event == "MAIL_SHOW" or event == "MAIL_INBOX_UPDATE" then
-        -- Scan immediately on open and on each inbox change (item taken out)
         UpdateMailboxData()
-        -- Also refresh the addon window so counts update in real time
-        -- while the mailbox is open
         if ExpiryTrackerFrame and ExpiryTrackerFrame:IsShown() then
             ExpiryTrackerFrame:GetScript("OnShow")()
         end
 
     elseif event == "MAIL_CLOSED" then
-        -- Final scan when mailbox closes — this is the authoritative count
-        -- after the player has finished taking items. Delay slightly so the
-        -- server has processed the removals before GetInboxNumItems updates.
         C_Timer.After(0.3, function()
             UpdateMailboxData()
             if ExpiryTrackerFrame and ExpiryTrackerFrame:IsShown() then
@@ -647,10 +575,13 @@ local function HideLinkTooltip(link)
     GameTooltip:Hide()
 end
 
--- Debug function shared by /etrdebug slash command and Config tab button
+-- =============================================================================
+-- Debug
+-- =============================================================================
+
 local function RunDebugForChar(charName, realm)
     if not charName or not realm then
-        print("|cffff9900[ExpiryTracker]|r Usage: /etrdebug CharName Realm")
+        print("|cffff9900[ExpiryTracker]|r Usage: /etrdebug CharName-Realm")
         return
     end
     local key = charName .. "-" .. realm
@@ -663,7 +594,6 @@ local function RunDebugForChar(charName, realm)
         print("  DB auctionMailCount: " .. tostring(db.auctionMailCount))
     else
         print("  DB entry: nil (mailbox never scanned on this char)")
-        -- Show all DB keys so we can spot key mismatches
         print("  All DB keys containing '" .. charName .. "':")
         for k, _ in pairs(ExpiryTrackerDB) do
             if type(k) == "string" and k:lower():find(charName:lower(), 1, true) then
@@ -706,14 +636,7 @@ end
 SLASH_ExpiryTrackerDebug1 = "/etrdebug"
 
 -- =============================================================================
--- UI
--- =============================================================================
-
--- =============================================================================
 -- Minimap Button
--- Follows LibDBIcon-1.0 conventions exactly for reliable positioning/display.
--- Button is created immediately but only shown after PLAYER_LOGIN so that
--- Minimap dimensions are finalised and SavedVariables are loaded.
 -- =============================================================================
 
 local minimapBtn = CreateFrame("Button", "ExpiryTrackerMinimapButton", Minimap)
@@ -727,44 +650,36 @@ minimapBtn:RegisterForDrag("LeftButton")
 minimapBtn:EnableMouse(true)
 minimapBtn:Hide()
 
--- Highlight (file ID from LibDBIcon)
-minimapBtn:SetHighlightTexture(136477) -- Interface\Minimap\UI-Minimap-ZoomButton-Highlight
+minimapBtn:SetHighlightTexture(136477)
 
--- Background circle (file ID from LibDBIcon)
 local minimapBg = minimapBtn:CreateTexture(nil, "BACKGROUND")
-minimapBg:SetTexture(136467) -- Interface\Minimap\UI-Minimap-Background
+minimapBg:SetTexture(136467)
 minimapBg:SetSize(24, 24)
 minimapBg:SetPoint("CENTER", 0, 0)
 
--- Icon
 local minimapIcon = minimapBtn:CreateTexture(nil, "ARTWORK")
 minimapIcon:SetTexture("Interface\\AddOns\\ExpiryTracker\\ExpiryTracker_icon")
 minimapIcon:SetSize(18, 18)
 minimapIcon:SetPoint("CENTER", 0, 0)
 
--- Border ring (file ID from LibDBIcon, TOPLEFT anchor as per LibDBIcon standard)
 local minimapBorder = minimapBtn:CreateTexture(nil, "OVERLAY")
-minimapBorder:SetTexture(136430) -- Interface\Minimap\MiniMap-TrackingBorder
+minimapBorder:SetTexture(136430)
 minimapBorder:SetSize(50, 50)
 minimapBorder:SetPoint("TOPLEFT", minimapBtn, "TOPLEFT", 0, 0)
 
--- Position using LibDBIcon formula: (Minimap width/2) + radius offset
 local function UpdateMinimapPos(angle)
     ExpiryTrackerDB.minimapAngle = angle
     local rad = math.rad(angle)
     local w   = (Minimap:GetWidth()  / 2) + 5
     local h   = (Minimap:GetHeight() / 2) + 5
-    local x   = math.cos(rad) * w
-    local y   = math.sin(rad) * h
     minimapBtn:ClearAllPoints()
-    minimapBtn:SetPoint("CENTER", Minimap, "CENTER", x, y)
+    minimapBtn:SetPoint("CENTER", Minimap, "CENTER", math.cos(rad) * w, math.sin(rad) * h)
 end
 
 minimapBtn:SetScript("OnClick", function(_, btn)
     if btn == "RightButton" then return end
-    local f = ExpiryTrackerFrame
-    if f then
-        if f:IsShown() then f:Hide() else f:Show() end
+    if ExpiryTrackerFrame then
+        if ExpiryTrackerFrame:IsShown() then ExpiryTrackerFrame:Hide() else ExpiryTrackerFrame:Show() end
     end
 end)
 
@@ -788,32 +703,24 @@ minimapBtn:SetScript("OnEnter", function(self)
 end)
 minimapBtn:SetScript("OnLeave", function() GameTooltip:Hide() end)
 
-
--- Store the exact table reference so we can remove it from registeredAddons
--- using LibDBIcon's proven approach (table.remove + UpdateDisplay)
 local compartmentData = nil
 
 local function UpdateCompartmentButton()
     if not AddonCompartmentFrame then return end
     local cfg = GetConfig()
-
     if cfg.showCompartment and not compartmentData then
-        -- Register and save the reference
         compartmentData = {
             text         = "ExpiryTracker",
             icon         = "Interface\\AddOns\\ExpiryTracker\\ExpiryTracker_icon",
             notCheckable = true,
             func         = function()
-                local f = ExpiryTrackerFrame
-                if f then
-                    if f:IsShown() then f:Hide() else f:Show() end
+                if ExpiryTrackerFrame then
+                    if ExpiryTrackerFrame:IsShown() then ExpiryTrackerFrame:Hide() else ExpiryTrackerFrame:Show() end
                 end
             end,
         }
         AddonCompartmentFrame:RegisterAddon(compartmentData)
-
     elseif not cfg.showCompartment and compartmentData then
-        -- Find and remove by reference, exactly as LibDBIcon does
         local addons = AddonCompartmentFrame.registeredAddons
         if addons then
             for i = #addons, 1, -1 do
@@ -823,14 +730,11 @@ local function UpdateCompartmentButton()
                 end
             end
         end
-        if AddonCompartmentFrame.UpdateDisplay then
-            AddonCompartmentFrame:UpdateDisplay()
-        end
+        if AddonCompartmentFrame.UpdateDisplay then AddonCompartmentFrame:UpdateDisplay() end
         compartmentData = nil
     end
 end
 
--- Show/hide respecting config — only called after DB is loaded
 local function UpdateMinimapButton()
     local cfg = GetConfig()
     if cfg.showMinimapButton then
@@ -841,6 +745,10 @@ local function UpdateMinimapButton()
     end
     UpdateCompartmentButton()
 end
+
+-- =============================================================================
+-- UI
+-- =============================================================================
 
 EventUtil.ContinueOnAddOnLoaded("ExpiryTracker", function()
 
@@ -861,7 +769,6 @@ EventUtil.ContinueOnAddOnLoaded("ExpiryTracker", function()
         local point, _, relPoint, x, y = self:GetPoint()
         ExpiryTrackerDB.mainWindowPos = { point = point, relPoint = relPoint, x = x, y = y }
     end)
-    -- Restore last position or default to center
     if ExpiryTrackerDB.mainWindowPos then
         local p = ExpiryTrackerDB.mainWindowPos
         frame:SetPoint(p.point, UIParent, p.relPoint, p.x, p.y)
@@ -908,15 +815,16 @@ EventUtil.ContinueOnAddOnLoaded("ExpiryTracker", function()
         return 22
     end)
     ScrollUtil.InitScrollBoxListWithScrollBar(scrollBox, scrollBar, view)
-    -- ===========================================================================
-    -- Config Panel — scrollable so content never gets cut off
-    -- ===========================================================================
+    scrollBar:SetHideIfUnscrollable(true)
+
+    -- ==========================================================================
+    -- Config Panel
+    -- ==========================================================================
     local configPanel = CreateFrame("Frame", nil, frame.Inset)
     configPanel:SetAllPoints()
     configPanel:Hide()
 
-    -- ScrollFrame + scrollbar using same MinimalScrollBar style as other tabs
-    local cfgScrollFrame = CreateFrame("ScrollFrame", nil, configPanel, "UIPanelScrollFrameTemplate")
+    local cfgScrollFrame = CreateFrame("ScrollFrame", nil, configPanel)
     cfgScrollFrame:SetPoint("TOPLEFT",     configPanel, "TOPLEFT",      5,  -5)
     cfgScrollFrame:SetPoint("BOTTOMRIGHT", configPanel, "BOTTOMRIGHT", -28,  5)
 
@@ -924,13 +832,12 @@ EventUtil.ContinueOnAddOnLoaded("ExpiryTracker", function()
     cfgScrollBar:SetPoint("TOPRIGHT",    configPanel, "TOPRIGHT",    -8,  -5)
     cfgScrollBar:SetPoint("BOTTOMRIGHT", configPanel, "BOTTOMRIGHT", -8,   5)
     ScrollUtil.InitScrollFrameWithScrollBar(cfgScrollFrame, cfgScrollBar)
+    cfgScrollBar:SetHideIfUnscrollable(true)
 
-    -- Content frame inside the scroll frame — tall enough for all controls
     local cfgContent = CreateFrame("Frame", nil, cfgScrollFrame)
     cfgContent:SetSize(cfgScrollFrame:GetWidth() or 700, 480)
     cfgScrollFrame:SetScrollChild(cfgContent)
 
-    -- Description text
     local descText = cfgContent:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
     descText:SetPoint("TOPLEFT",  cfgContent, "TOPLEFT",  10, -10)
     descText:SetPoint("TOPRIGHT", cfgContent, "TOPRIGHT", -10, -10)
@@ -938,8 +845,10 @@ EventUtil.ContinueOnAddOnLoaded("ExpiryTracker", function()
     descText:SetSpacing(4)
     descText:SetTextColor(1, 1, 1, 1)
     descText:SetText(
-        "ExpiryTracker monitors your auction house activity across all characters using Syndicator (required). It monitors active and expired auction listings, mailbox gold from AH sales, and alerts you at login when items need attention. Open the Summary tab for a per-character overview, the Details tab for individual item expiry times. Mailbox gold is scanned when you visit the mailbox.\n" ..
-        "\n" ..
+        "ExpiryTracker monitors your auction house activity across all characters using Syndicator (required). " ..
+        "It monitors active and expired auction listings, mailbox gold from AH sales, and alerts you at login " ..
+        "when items need attention. Open the Summary tab for a per-character overview, the Details tab for " ..
+        "individual item expiry times. Mailbox gold is scanned when you visit the mailbox.\n\n" ..
         "Slash commands:  /etr  (open window)     /etrdebug CharName-Realm  (diagnose a character)"
     )
 
@@ -973,14 +882,13 @@ EventUtil.ContinueOnAddOnLoaded("ExpiryTracker", function()
         return slider
     end
 
-    -- All controls anchored relative to each other from descText downward
     local cb1 = MakeCheckbox(cfgContent, "showChat",         "Show chat message on login")
     cb1:SetPoint("TOPLEFT", descText, "BOTTOMLEFT", 0, -12)
 
     local cb2 = MakeCheckbox(cfgContent, "enablePopup",      "Enable expiration popup")
     cb2:SetPoint("TOPLEFT", cb1, "BOTTOMLEFT", 0, -4)
 
-    local cb3 = MakeCheckbox(cfgContent, "showMinimapButton","Show minimap button")
+    local cb3 = MakeCheckbox(cfgContent, "showMinimapButton", "Show minimap button")
     cb3:SetPoint("TOPLEFT", cb2, "BOTTOMLEFT", 0, -4)
     cb3:SetScript("OnClick", function(self)
         GetConfig().showMinimapButton = self:GetChecked()
@@ -998,12 +906,11 @@ EventUtil.ContinueOnAddOnLoaded("ExpiryTracker", function()
     s1:SetPoint("TOPLEFT", cb4, "BOTTOMLEFT", 0, -28)
 
     local s2 = MakeSlider(cfgContent, "urgentDays", "Urgent threshold (days)",   1, 7)
-    s2:SetPoint("TOPLEFT", s1,  "BOTTOMLEFT", 0, -52)
+    s2:SetPoint("TOPLEFT", s1, "BOTTOMLEFT", 0, -52)
 
     local s3 = MakeSlider(cfgContent, "snoozeMins", "Snooze duration (minutes)", 1, 120)
-    s3:SetPoint("TOPLEFT", s2,  "BOTTOMLEFT", 0, -52)
+    s3:SetPoint("TOPLEFT", s2, "BOTTOMLEFT", 0, -52)
 
-    -- Debug section
     local debugLabel = cfgContent:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
     debugLabel:SetPoint("TOPLEFT", s3, "BOTTOMLEFT", 0, -42)
     debugLabel:SetText("Debug: type CharName-Realm and click Run")
@@ -1026,14 +933,17 @@ EventUtil.ContinueOnAddOnLoaded("ExpiryTracker", function()
         RunDebugForChar(charName, realm)
     end)
 
+    -- ==========================================================================
+    -- Summary / Details headers and rendering
+    -- ==========================================================================
 
     local summaryHeaders = {
-        { offset = 0,   width = 140, text = "Realm"          },
-        { offset = 145, width = 130, text = "Character"      },
-        { offset = 280, width = 60,  text = "Expired"        },
-        { offset = 345, width = 55,  text = "Active"         },
-        { offset = 405, width = 150, text = "Mailbox Gold"   },
-        { offset = 560, width = 215, text = "Expiry" },
+        { offset = 0,   width = 140, text = "Realm"        },
+        { offset = 145, width = 130, text = "Character"    },
+        { offset = 280, width = 60,  text = "Expired"      },
+        { offset = 345, width = 55,  text = "Active"       },
+        { offset = 405, width = 150, text = "Mailbox Gold" },
+        { offset = 560, width = 215, text = "Expiry"       },
     }
 
     local detailHeaders = {
@@ -1104,12 +1014,8 @@ EventUtil.ContinueOnAddOnLoaded("ExpiryTracker", function()
 
         if not f.linkBtn then
             f.linkBtn = CreateFrame("Button", nil, f)
-            f.linkBtn:SetScript("OnEnter", function(self)
-                ShowLinkTooltip(self, self.link)
-            end)
-            f.linkBtn:SetScript("OnLeave", function(self)
-                HideLinkTooltip(self.link)
-            end)
+            f.linkBtn:SetScript("OnEnter", function(self) ShowLinkTooltip(self, self.link) end)
+            f.linkBtn:SetScript("OnLeave", function(self) HideLinkTooltip(self.link) end)
             f.linkBtn:SetScript("OnClick", function(self)
                 if self.link and IsModifiedClick("CHATLINK") then ChatEdit_InsertLink(self.link) end
             end)
@@ -1120,7 +1026,6 @@ EventUtil.ContinueOnAddOnLoaded("ExpiryTracker", function()
         EnsureStrings(f, 6)
         f.linkBtn:Hide()
 
-        -- Spacer row: just a thin line, no text
         if data.isSpacer then
             for i = 1, 6 do f.v[i]:SetText("") end
             f.line:Hide()
@@ -1147,16 +1052,15 @@ EventUtil.ContinueOnAddOnLoaded("ExpiryTracker", function()
             v[5]:SetText(FormatGoldWithCommas(data.gold))
             v[6]:SetText("")
         else
-            local charKey  = GetCharacterKey(data.character, data.realm)
-            local dbEntry  = ExpiryTrackerDB[charKey]
+            local charKey = GetCharacterKey(data.character, data.realm)
+            local dbEntry = ExpiryTrackerDB[charKey]
             local goldText = (dbEntry and dbEntry.gold and dbEntry.gold > 0)
-                             and FormatGoldWithCommas(dbEntry.gold)
-                             or  DASH
+                             and FormatGoldWithCommas(dbEntry.gold) or DASH
             local nameColor = data.expired > 0 and RED_FONT_COLOR or HIGHLIGHT_FONT_COLOR
             v[1]:SetText(nameColor:WrapTextInColorCode(data.realm))
             v[2]:SetText(nameColor:WrapTextInColorCode(data.character))
-            v[3]:SetText(data.expired > 0 and RED_FONT_COLOR:WrapTextInColorCode(data.expired)   or DASH)
-            v[4]:SetText(data.active  > 0 and GREEN_FONT_COLOR:WrapTextInColorCode(data.active)  or DASH)
+            v[3]:SetText(data.expired > 0 and RED_FONT_COLOR:WrapTextInColorCode(data.expired)  or DASH)
+            v[4]:SetText(data.active  > 0 and GREEN_FONT_COLOR:WrapTextInColorCode(data.active) or DASH)
             v[5]:SetText(goldText)
             v[6]:SetText(FormatExpiry(data.soonestExpiry))
         end
@@ -1190,7 +1094,6 @@ EventUtil.ContinueOnAddOnLoaded("ExpiryTracker", function()
             v[4]:SetText(FormatExpiry(data.expirationTime))
 
             f.linkBtn:Show()
-            -- Size button to the text only, not the full column width
             f.linkBtn:ClearAllPoints()
             f.linkBtn:SetPoint("LEFT", v[1], "LEFT", 0, 0)
             f.linkBtn:SetHeight(v[1]:GetHeight() > 0 and v[1]:GetHeight() or 14)
@@ -1202,7 +1105,6 @@ EventUtil.ContinueOnAddOnLoaded("ExpiryTracker", function()
     local function Refresh()
         currentTime = time()
 
-        -- Config tab: show config panel, hide list UI
         if frame.selectedTab == 3 then
             configPanel:Show()
             header:Hide()
@@ -1225,21 +1127,17 @@ EventUtil.ContinueOnAddOnLoaded("ExpiryTracker", function()
                 local charName = c.details.character or "Unknown"
                 local charKey  = charName .. "-" .. realm
                 local charData = { realm = realm, character = charName, expired = 0, active = 0, soonestExpiry = 0 }
-                local hasAuctions   = false
-                local mostRecentExp = 0   -- most recently expired auction (for red expiry display)
-                local soonestActive = 0   -- soonest upcoming expiry
-                local syndicatorExpired = 0  -- raw expired count from Syndicator
+                local mostRecentExp = 0
+                local soonestActive = 0
 
                 if c.auctions then
                     for _, a in ipairs(c.auctions) do
-                        hasAuctions = true
                         local auction          = CopyTable(a)
                         auction.realm          = realm
                         auction.character      = charName
                         auction.expirationTime = auction.expirationTime or 0
                         if auction.expirationTime > 0 then
                             if auction.expirationTime < currentTime then
-                                syndicatorExpired = syndicatorExpired + 1
                                 if auction.expirationTime > mostRecentExp then
                                     mostRecentExp = auction.expirationTime
                                 end
@@ -1249,8 +1147,6 @@ EventUtil.ContinueOnAddOnLoaded("ExpiryTracker", function()
                                 if soonestActive == 0 or auction.expirationTime < soonestActive then
                                     soonestActive = auction.expirationTime
                                 end
-                                -- Only add active auctions to details — expired ones
-                                -- may have been collected; we handle those below
                                 tinsert(details, auction)
                             end
                         else
@@ -1259,21 +1155,18 @@ EventUtil.ContinueOnAddOnLoaded("ExpiryTracker", function()
                     end
                 end
 
-                -- Use shared helper so Refresh and BuildAlerts always agree
-                local db = ExpiryTrackerDB[charKey]
+                local db          = ExpiryTrackerDB[charKey]
                 local trueExpired = CalcTrueExpired(c, charKey)
 
-                -- Add expired auction rows to details only up to trueExpired count
-                -- (re-walk auctions and add the expired ones, capped)
                 if c.auctions and trueExpired > 0 then
                     local addedExpired = 0
                     for _, a in ipairs(c.auctions) do
                         if addedExpired >= trueExpired then break end
                         local exp = a.expirationTime or 0
                         if exp > 0 and exp < currentTime then
-                            local auction      = CopyTable(a)
-                            auction.realm      = realm
-                            auction.character  = charName
+                            local auction     = CopyTable(a)
+                            auction.realm     = realm
+                            auction.character = charName
                             tinsert(details, auction)
                             addedExpired = addedExpired + 1
                         end
@@ -1283,20 +1176,12 @@ EventUtil.ContinueOnAddOnLoaded("ExpiryTracker", function()
                 charData.expired = trueExpired
                 totalExp         = totalExp + trueExpired
 
-                -- Expired auctions take priority: show most recent expiry in red.
-                -- If all active, show soonest upcoming expiry.
-                -- Only show expired expiry time if there are actually expired items
-                -- still in the mailbox (trueExpired). If they were all collected,
-                -- mostRecentExp is stale data from Syndicator — ignore it.
                 if trueExpired > 0 then
                     charData.soonestExpiry = mostRecentExp > 0 and mostRecentExp or soonestActive
                 else
                     charData.soonestExpiry = soonestActive
                 end
 
-
-
-                -- db already defined above (ExpiryTrackerDB[charKey])
                 if db and db.gold and db.gold > 0 then
                     totalGold = totalGold + db.gold
                     tinsert(details, {
@@ -1306,7 +1191,6 @@ EventUtil.ContinueOnAddOnLoaded("ExpiryTracker", function()
                         gold           = db.gold,
                         expirationTime = db.oldestMailExpiry or 0,
                     })
-                    -- If no auction expiry found, use gold mail expiry for the summary column
                     if charData.soonestExpiry == 0 and (db.oldestMailExpiry or 0) > 0 then
                         charData.soonestExpiry = db.oldestMailExpiry
                     end
@@ -1342,11 +1226,9 @@ EventUtil.ContinueOnAddOnLoaded("ExpiryTracker", function()
         end
     end
 
-
     local function TabClick(self)
         PanelTemplates_SetTab(frame, self:GetID())
         frame.selectedTab = self:GetID()
-        
         Refresh()
     end
 
@@ -1368,7 +1250,6 @@ EventUtil.ContinueOnAddOnLoaded("ExpiryTracker", function()
     PanelTemplates_SetTab(frame, 1)
     PanelTemplates_UpdateTabs(frame)
 
-    -- Initialize minimap button now that DB is loaded
     UpdateMinimapButton()
 
     frame:SetScript("OnShow", function()
