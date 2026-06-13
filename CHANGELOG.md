@@ -1,3 +1,6 @@
+## 5.1 (2026-06-13)
+- Bug fixes
+
 ## 5 (2026-06-04)
 - Added Summary tab with per-character overview showing expired auctions, active auctions, mailbox gold, and next expiry time
 - Added Config tab with alert thresholds, snooze duration, and UI toggles
