@@ -1,5 +1,12 @@
 ## 5.1 (2026-06-13)
-- Bug fixes
+
+- Fixed table.remove and break on the same line in UpdateCompartmentButton — this was a Lua syntax issue that could prevent the compartment button from being unregistered correctly
+- Fixed loginCheckDone being reset to false on every AuctionsCacheUpdate callback — this caused the expired auctions chat message to reprint every time the Auction House was opened rather than only once per login session
+- Fixed double scrollbar appearing on the Config tab — UIPanelScrollFrameTemplate was adding its own built-in scrollbar alongside our MinimalScrollBar
+- Fixed scrollbars showing when content fits in the visible area — added SetHideIfUnscrollable(true) to all three scrollbars (Summary/Details, Config panel, and popup)
+- Popup alert now sorts the current logged-in character to the top of the list if they have expired auctions, followed by characters with the most expired auctions
+- BuildAlerts now correctly excludes non-character keys (mainWindowPos, alertPopupPos, minimap) when iterating ExpiryTrackerDB to find characters with mailbox gold
+- Removed top-level ExpiryTrackerDB = ExpiryTrackerDB or {} — WoW handles SavedVariables initialization automatically
 
 ## 5 (2026-06-04)
 - Added Summary tab with per-character overview showing expired auctions, active auctions, mailbox gold, and next expiry time
